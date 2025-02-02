@@ -25,11 +25,12 @@ if [ ! -d $1 ]; then
    echo "$1 is not a directory"
    exit 1
 fi
+
 # assign parameters to script variables
 filesdir=$1
 searchstr=$2
 
-# Find the number of files in the directory and subdirectories
+# Find the number of files in the directory and subdirectories counting the number of lines returned by find
 num_files=$(find "$filesdir" -type f | wc -l)
 
 # Find the number of matching lines in the files

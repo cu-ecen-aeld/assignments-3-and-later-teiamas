@@ -1,5 +1,13 @@
 #include "systemcalls.h"
+#include <stdlib.h>
+#include <sys/wait.h>
+#include <stdio.h>
 
+#include <unistd.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <stdbool.h>
+#include <fcntl.h>
 /**
  * @param cmd the command to execute with system()
  * @return true if the command in @param cmd was executed
@@ -16,8 +24,20 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
-
-    return true;
+    int syscall_result = system(cmd); 
+    int success = false;
+    system(cmd);
+    if (syscall_result == -1) {
+        // system() call failed
+        success = false; 
+    } else if (WIFEXITED(syscall_result)) {
+        // The process exited normally check for result code
+        success = (WEXITSTATUS(syscall_result) == EXIT_SUCCESS);
+    }  else {
+        // The process did not exit normally
+        success = false;
+    }
+    return success;    
 }
 
 /**
@@ -58,10 +78,36 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+    int success = false; // Initialize success to false
+    int status;          // Variable to hold the status of the child process
+    fflush(stdout);      // Flush the output buffer to ensure all output is written to the console
+    pid_t pid = fork();  // Create a new process by forking
 
+    if (pid == -1) {
+        // fork failed
+        success = false; 
+    } else if (pid == 0) {
+        // child process
+
+        execv(command[0], command); // Execute the command in the child process
+        // execv only returns if an error occurred
+        perror("execv");
+        success = false; 
+        exit(EXIT_FAILURE); // Ensure child process exits if execv fails
+} else {
+        // parent process, waits for the child process to finish
+        if (waitpid(pid, &status, 0) == -1) {
+            // child proc finished with failure code
+            success = false; 
+        } else if (WIFEXITED(status)) {
+            // Child process terminated normally
+            success = (WEXITSTATUS(status) == EXIT_SUCCESS); // Set success to the exit status of the child process
+        }
+    }
+    //reinit arg list macroes
     va_end(args);
 
-    return true;
+    return success;
 }
 
 /**
@@ -82,7 +128,7 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
+    // command[count] = command[count];
 
 
 /*
@@ -92,8 +138,53 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
+    // Create a new process using 
+    fflush(stdout); // Flush the output buffer to ensure all output is written to the console
+    int success = false; // Initialize success to false
+    int status;          // Variable to hold the status of the child process
+    fflush(stdout);      // Flush the output buffer to ensure all output is written to the console
+    pid_t pid = fork();  // Create a new process by forking
+    // Check if the command is an absolute path
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+    if (fd >= 0) { 
+        if (pid == -1) {
+            // fork failed
+            success = false; 
+        } else if (pid == 0) {
+            // child process
+            
+            // Redirect stdout to the file descriptor
+            if (dup2(fd, 1) < 0) { 
+                perror("dup2");
+                exit(EXIT_FAILURE); // Ensure child process exits if execv fails 
+            }
+            close(fd); // Close the file descriptor no more needed
 
+            execv(command[0], command); // Execute the command in the child process
+            // execv only returns if an error occurred
+            perror("execv");
+            success = false; 
+            exit(EXIT_FAILURE); // Ensure child process exits if execv fails
+        } else {
+            // parent process, waits for the child process to finish
+            close(fd); // Close the file descriptor in the parent process
+            // parent process, waits for the child process to finish
+            if (waitpid(pid, &status, 0) == -1) {
+                // child proc finished with failure code
+                success = false; 
+            } else if (WIFEXITED(status)) {
+                // Child process terminated normally
+                success = (WEXITSTATUS(status) == EXIT_SUCCESS); // Set success to the exit status of the child process
+            }
+        }
+    }else {
+        printf("Error opening file\n");
+        fflush(stdout);
+        success = false;
+    }
+
+    //reinit arg list macroes
     va_end(args);
 
-    return true;
+    return success;
 }

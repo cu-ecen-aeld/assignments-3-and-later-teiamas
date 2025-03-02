@@ -5,6 +5,9 @@
 set -e
 set -u
 
+export PATH=$PATH:/home/teiamas/arm-cross-compiler/arm-gnu-toolchain-13.3.rel1-x86_64-aarch64-none-linux-gnu/bin
+
+
 OUTDIR=${1:-/tmp/aeld}
 KERNEL_REPO=git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
 KERNEL_VERSION=v5.15.163

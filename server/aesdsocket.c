@@ -13,11 +13,15 @@
 #include <pthread.h>
 #include <sys/queue.h>
 #include <time.h>
+#include <sys/file.h>
 
 #define PORT 9000
 #define PORT_STR "9000"
 #define BACKLOG 5
 #define FILE_PATH "/var/tmp/aesdsocketdata"
+#define LOCK_FILE "/tmp/aesdsocket.lock"
+#define LOCK_WAIT_TIME 15 // Maximum wait time in seconds
+#define LOCK_RETRY_INTERVAL 1 // Retry interval in seconds
 
 volatile sig_atomic_t stop = 0;
 pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -180,6 +184,40 @@ void daemonize() {
 
 int main(int argc, char *argv[]) {
     int daemon_mode = 0;
+    int lock_fd;
+
+    // Open the lock file
+    lock_fd = open(LOCK_FILE, O_CREAT | O_RDWR, 0666);
+    if (lock_fd == -1) {
+        syslog(LOG_ERR, "Failed to open lock file: %s", strerror(errno));
+        return -1;
+    }
+
+    // Try to acquire an exclusive lock with a retry mechanism
+    int wait_time = 0;
+    while (flock(lock_fd, LOCK_EX | LOCK_NB) == -1) {
+        if (errno == EWOULDBLOCK) {
+            if (wait_time >= LOCK_WAIT_TIME) {
+                syslog(LOG_ERR, "Another instance of aesdsocket is still running or shutting down after %d seconds", LOCK_WAIT_TIME);
+                close(lock_fd);
+                return -1;
+            }
+            syslog(LOG_INFO, "Another instance is running, waiting for lock... (%d/%d seconds)", wait_time, LOCK_WAIT_TIME);
+            sleep(LOCK_RETRY_INTERVAL);
+            wait_time += LOCK_RETRY_INTERVAL;
+        } else {
+            syslog(LOG_ERR, "Failed to acquire lock: %s", strerror(errno));
+            close(lock_fd);
+            return -1;
+        }
+    }
+
+    // Write the PID to the lock file
+    if (ftruncate(lock_fd, 0) == -1 || dprintf(lock_fd, "%d\n", getpid()) < 0) {
+        syslog(LOG_ERR, "Failed to write PID to lock file: %s", strerror(errno));
+        close(lock_fd);
+        return -1;
+    }
 
     // Parse command-line arguments
     if (argc == 2 && strcmp(argv[1], "-d") == 0) {
@@ -206,6 +244,13 @@ int main(int argc, char *argv[]) {
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1) {
         syslog(LOG_ERR, "Failed to create socket: %s", strerror(errno));
+        return -1;
+    }
+
+    int opt = 1;
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
+        syslog(LOG_ERR, "Failed to set socket options: %s", strerror(errno));
+        close(server_fd);
         return -1;
     }
 
@@ -280,10 +325,14 @@ int main(int argc, char *argv[]) {
 
     // Cleanup and shutdown
     syslog(LOG_INFO, "Shutting down server...");
+    syslog(LOG_INFO, "Threads cleanup ... started");
     clean_up_threads();
+    syslog(LOG_INFO, "Threads cleanup ... done");
 
     // Wait for the timer thread to finish
+    syslog(LOG_INFO, "Timer thread stop ...");
     pthread_join(timer_tid, NULL);
+    syslog(LOG_INFO, "Timer thread stop ... done");
 
     if (close(server_fd) == -1) {
         syslog(LOG_ERR, "Failed to close server socket: %s", strerror(errno));
@@ -291,6 +340,20 @@ int main(int argc, char *argv[]) {
     if (unlink(FILE_PATH) == -1) {
         syslog(LOG_ERR, "Failed to delete file: %s", strerror(errno));
     }
+    if (close(lock_fd) == -1) {
+        syslog(LOG_ERR, "Failed to close lock file: %s", strerror(errno));
+    }
+    if (unlink(LOCK_FILE) == -1) {
+        syslog(LOG_ERR, "Failed to delete lock file: %s", strerror(errno));
+    }
+    syslog(LOG_INFO, "Server shutdown complete");
     closelog();
+    // Exit the program
+    if (daemon_mode) {
+        syslog(LOG_INFO, "Daemon mode: exiting");
+        exit(EXIT_SUCCESS);
+    }
+    // If not in daemon mode, return to the caller
+    syslog(LOG_INFO, "Exiting");
     return 0;
 }
